@@ -13,5 +13,7 @@ license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+# tokio = { git = "https://github.com/fenollp/tokio.git", branch = "task-local-clone", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0,>=0.7", features = ["rt"] }
+# tokio-util = { git = "https://github.com/fenollp/tokio.git", branch = "task-local-clone", features = ["rt"] }
 tracing = "0,>=0.1"
