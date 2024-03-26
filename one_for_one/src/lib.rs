@@ -85,7 +85,7 @@ impl Supervisor {
         slf.tasks.spawn(future)
     }
 
-    /// Spawn starts a supervised task, calling `spawn_blocking`.    
+    /// Spawn starts a supervised task, calling `spawn_blocking`.
     #[track_caller]
     pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
     where
