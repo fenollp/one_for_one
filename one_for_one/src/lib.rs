@@ -29,12 +29,21 @@ tokio::task_local! {
     static SUPERVIZED: Supervisor;
 }
 
+/// Gets a handle on this coode's Supervisor.
+///
+/// Returns `None` if outside of `supervized(async move { .. })`
+/// or of `sync_supervized(|| ..)`.
+#[inline]
+pub fn current() -> Option<Supervisor> {
+    SUPERVIZED.try_with(Clone::clone).ok()
+}
+
 /// Scopes (async) code that needs supervision.
 pub async fn supervized<F>(f: F) -> F::Output
 where
     F: std::future::Future,
 {
-    assert!(SUPERVIZED.try_with(|_| ()).is_err());
+    assert_ne!(SUPERVIZED.try_with(|_| ()), Ok(()));
     SUPERVIZED.scope(Supervisor::default(), f).await //FIXME: await outside?
 }
 
@@ -44,7 +53,7 @@ pub fn sync_supervized<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    assert!(SUPERVIZED.try_with(|_| ()).is_err());
+    assert_ne!(SUPERVIZED.try_with(|_| ()), Ok(()));
     SUPERVIZED.sync_scope(Supervisor::default(), f)
 }
 
@@ -61,6 +70,8 @@ pub struct Supervisor {
     tasks: TaskTracker,
 }
 
+const REASON: &str = "Not running within supervized(async move { .. }) or sync_supervized(|| ..)";
+
 impl Supervisor {
     /// Spawn starts a supervised task, calling `spawn`.
     #[inline]
@@ -70,7 +81,7 @@ impl Supervisor {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let slf = SUPERVIZED.with(Clone::clone); //TODO: try_with -> thiserror + try_spawn*?
+        let slf = current().expect(REASON);
         slf.tasks.spawn(future)
     }
 
@@ -81,14 +92,14 @@ impl Supervisor {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let slf = SUPERVIZED.with(Clone::clone);
+        let slf = current().expect(REASON);
         slf.tasks.spawn_blocking(f)
     }
 
     /// Returns supervision state immediately
     #[must_use]
     pub fn is_cancelled() -> bool {
-        let slf = SUPERVIZED.with(Clone::clone);
+        let slf = current().expect(REASON);
         slf.token.is_cancelled()
     }
 
@@ -96,7 +107,7 @@ impl Supervisor {
     /// tree is interrupted.
     /// Akin to Go's `<-ctx.Done()` chan recv.
     pub async fn done() {
-        let slf = SUPERVIZED.with(Clone::clone);
+        let slf = current().expect(REASON);
         // Gets sibling tokens (don't die if a sibling dies)
         let _: () = slf.token.child_token().cancelled().await;
         warn!("Children cancelled");
@@ -106,7 +117,7 @@ impl Supervisor {
     /// of the supervision tree.
     /// Completes when all children are confirmed dead.
     pub async fn terminate() {
-        let slf = SUPERVIZED.with(Clone::clone);
+        let slf = current().expect(REASON);
         warn!("Terminating...");
         slf.tasks.close();
         slf.token.cancel();
