@@ -3,7 +3,7 @@ use std::future::Future;
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
-    task::JoinHandle,
+    task::{futures::TaskLocalFuture, JoinHandle},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
@@ -39,12 +39,12 @@ pub fn current() -> Option<Supervisor> {
 }
 
 /// Scopes (async) code that needs supervision.
-pub async fn supervized<F>(f: F) -> F::Output
+pub fn supervized<F>(f: F) -> TaskLocalFuture<Supervisor, F>
 where
     F: std::future::Future,
 {
     let slf = current().unwrap_or_default();
-    SUPERVIZED.scope(slf, f).await
+    SUPERVIZED.scope(slf, f)
 }
 
 /// Scopes code that needs supervision.
