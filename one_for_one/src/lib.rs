@@ -1,4 +1,4 @@
-use std::{future::Future /*sync::OnceLock*/};
+use std::future::Future;
 
 use tokio::{
     select,
@@ -59,8 +59,6 @@ fn assert_all() {
 //     fn set_supervisor(self, sup: Supervisor);
 // }
 
-// static ONCE_LOCK: OnceLock<Supervisor> = OnceLock::new();
-
 tokio::task_local! {
     static SUPERVIZED: Supervisor;
 }
@@ -84,130 +82,66 @@ where
     SUPERVIZED.sync_scope(Supervisor::default(), f)
 }
 
-/// Spawn starts a supervised task, calling `spawn`.
-#[inline]
-#[track_caller]
-pub fn spawn<F, G>(task: G) -> JoinHandle<F::Output>
-where
-    G: FnOnce(Supervisor) -> F,
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    let slf = SUPERVIZED.with(Clone::clone); //TODO: try_with -> thiserror + try_spawn*?
-    let this = slf.clone();
-    slf.tasks.spawn(task(this))
-}
-
-/// Spawn starts a supervised task, calling `spawn_blocking`.
-#[inline]
-#[track_caller]
-pub fn spawn_blocking<F, T>(task: F) -> JoinHandle<T>
-where
-    F: FnOnce(Supervisor) -> T,
-    F: Send + 'static,
-    T: Send + 'static,
-{
-    let slf = SUPERVIZED.with(Clone::clone);
-    let this = slf.clone();
-    slf.tasks.spawn_blocking(|| task(this))
-}
-
-/// Returns supervision state immediately
-#[must_use]
-pub fn is_cancelled() -> bool {
-    let slf = SUPERVIZED.with(Clone::clone);
-    slf.token.is_cancelled()
-}
-
-/// A future that completes when the supervision
-/// tree is interrupted.
-/// Akin to Go's `<-ctx.Done()` chan recv.
-pub async fn done() {
-    let slf = SUPERVIZED.with(Clone::clone);
-    // Gets sibling tokens (don't die if a sibling dies)
-    let _: () = slf.token.child_token().cancelled().await;
-    warn!("Children cancelled");
-}
-
-/// A future that triggers the interruption or termination
-/// of the supervision tree.
-/// Completes when all children are confirmed dead.
-pub async fn die() {
-    let slf = SUPERVIZED.with(Clone::clone);
-    warn!("Terminating...");
-    slf.tasks.close();
-    slf.token.cancel();
-    slf.tasks.wait().await;
-    warn!("Terminated!");
-}
-
 impl Supervisor {
     // /// Branch a `Supervized` instance under this tree
     // pub fn supervize(&self, instance: impl Supervized) {
     //     instance.set_supervisor(self.clone());
     // }
 
-    // pub fn init() -> Supervisor {
-    //     let supervisor = Supervisor::default();
-    //     ONCE_LOCK.set(supervisor.clone()).expect("setting supervisor singleton");
-    //     supervisor
-    // }
-
     /// Spawn starts a supervised task, calling `spawn`.
     #[inline]
     #[track_caller]
-    pub fn spawn<F, G>(&self, task: G) -> JoinHandle<F::Output>
+    pub fn spawn<F, G>(task: G) -> JoinHandle<F::Output>
     where
         G: FnOnce(Self) -> F,
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let this = self.clone();
-        self.tasks.spawn(task(this))
+        let slf = SUPERVIZED.with(Clone::clone); //TODO: try_with -> thiserror + try_spawn*?
+        let this = slf.clone();
+        slf.tasks.spawn(task(this))
     }
 
     /// Spawn starts a supervised task, calling `spawn_blocking`.
     #[inline]
     #[track_caller]
-    pub fn spawn_blocking<F, T>(&self, task: F) -> JoinHandle<T>
+    pub fn spawn_blocking<F, T>(task: F) -> JoinHandle<T>
     where
         F: FnOnce(Self) -> T,
         F: Send + 'static,
         T: Send + 'static,
     {
-        let this = self.clone();
-        self.tasks.spawn_blocking(|| task(this))
+        let slf = SUPERVIZED.with(Clone::clone);
+        let this = slf.clone();
+        slf.tasks.spawn_blocking(|| task(this))
     }
 
     /// Returns supervision state immediately
     #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.token.is_cancelled()
+    pub fn is_cancelled() -> bool {
+        let slf = SUPERVIZED.with(Clone::clone);
+        slf.token.is_cancelled()
     }
 
     /// A future that completes when the supervision
     /// tree is interrupted.
     /// Akin to Go's `<-ctx.Done()` chan recv.
-    #[allow(clippy::manual_async_fn)] // FIXME: try dropping (does it keep Send?)
-    pub fn done(&self) -> impl Future<Output = ()> + Send + '_ {
-        async move {
-            // Gets sibling tokens (don't die if a sibling dies)
-            let _: () = self.token.child_token().cancelled().await;
-            warn!("Children cancelled");
-        }
+    pub async fn done() {
+        let slf = SUPERVIZED.with(Clone::clone);
+        // Gets sibling tokens (don't die if a sibling dies)
+        let _: () = slf.token.child_token().cancelled().await;
+        warn!("Children cancelled");
     }
 
     /// A future that triggers the interruption or termination
     /// of the supervision tree.
     /// Completes when all children are confirmed dead.
-    #[allow(clippy::manual_async_fn)] // FIXME: try dropping (does it keep Send?)
-    pub fn die(&self) -> impl Future<Output = ()> + Send + '_ {
-        async move {
-            warn!("Terminating...");
-            self.tasks.close();
-            self.token.cancel();
-            self.tasks.wait().await;
-            warn!("Terminated!");
-        }
+    pub async fn terminate() {
+        let slf = SUPERVIZED.with(Clone::clone);
+        warn!("Terminating...");
+        slf.tasks.close();
+        slf.token.cancel();
+        slf.tasks.wait().await;
+        warn!("Terminated!");
     }
 }
