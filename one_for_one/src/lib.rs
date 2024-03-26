@@ -43,8 +43,8 @@ pub async fn supervized<F>(f: F) -> F::Output
 where
     F: std::future::Future,
 {
-    assert_ne!(SUPERVIZED.try_with(|_| ()), Ok(()));
-    SUPERVIZED.scope(Supervisor::default(), f).await //FIXME: await outside?
+    let slf = current().unwrap_or_default();
+    SUPERVIZED.scope(slf, f).await
 }
 
 /// Scopes code that needs supervision.
@@ -53,8 +53,8 @@ pub fn sync_supervized<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    assert_ne!(SUPERVIZED.try_with(|_| ()), Ok(()));
-    SUPERVIZED.sync_scope(Supervisor::default(), f)
+    let slf = current().unwrap_or_default();
+    SUPERVIZED.sync_scope(slf, f)
 }
 
 /// Supervisor implements a supervision tree
