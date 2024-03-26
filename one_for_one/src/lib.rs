@@ -3,7 +3,7 @@ use std::future::Future;
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
-    task::{futures::TaskLocalFuture, JoinHandle},
+    task::JoinHandle,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
@@ -25,6 +25,29 @@ pub async fn should_die() {
     }
 }
 
+tokio::task_local! {
+    static SUPERVIZED: Supervisor;
+}
+
+/// Scopes (async) code that needs supervision.
+pub async fn supervized<F>(f: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    assert!(SUPERVIZED.try_with(|_| ()).is_err());
+    SUPERVIZED.scope(Supervisor::default(), f).await //FIXME: await outside?
+}
+
+/// Scopes code that needs supervision.
+#[track_caller]
+pub fn sync_supervized<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    assert!(SUPERVIZED.try_with(|_| ()).is_err());
+    SUPERVIZED.sync_scope(Supervisor::default(), f)
+}
+
 /// Supervisor implements a supervision tree
 /// where all children get terminated on interrupt
 /// but each die on its own when it's their own trauma.
@@ -38,82 +61,28 @@ pub struct Supervisor {
     tasks: TaskTracker,
 }
 
-#[test]
-fn assert_all() {
-    fn assert_clone<T: Clone>() {}
-    fn assert_send<T: Send>() {}
-    fn assert_sized<T: Sized>() {}
-    fn assert_sync<T: Sync>() {}
-
-    assert_clone::<Supervisor>();
-    assert_send::<Supervisor>();
-    assert_sized::<Supervisor>();
-    assert_sync::<Supervisor>();
-}
-
-// // TODO: derive(spawn_under("sup")) to auto-impl Supervized
-
-// /// The revolution will be Supervized
-// pub trait Supervized {
-//     /// Consumes `sup` to keep in `self`
-//     fn set_supervisor(self, sup: Supervisor);
-// }
-
-tokio::task_local! {
-    static SUPERVIZED: Supervisor;
-}
-
-/// Scopes (async) code that needs supervision.
-pub async fn supervized<F>(f: F) -> TaskLocalFuture<Supervisor, F>
-where
-    F: std::future::Future,
-{
-    assert!(SUPERVIZED.try_with(|_| ()).is_err());
-    SUPERVIZED.scope(Supervisor::default(), f)
-}
-
-/// Scopes code that needs supervision.
-#[track_caller]
-pub fn sync_supervized<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    assert!(SUPERVIZED.try_with(|_| ()).is_err());
-    SUPERVIZED.sync_scope(Supervisor::default(), f)
-}
-
 impl Supervisor {
-    // /// Branch a `Supervized` instance under this tree
-    // pub fn supervize(&self, instance: impl Supervized) {
-    //     instance.set_supervisor(self.clone());
-    // }
-
     /// Spawn starts a supervised task, calling `spawn`.
     #[inline]
     #[track_caller]
-    pub fn spawn<F, G>(task: G) -> JoinHandle<F::Output>
+    pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
     where
-        G: FnOnce(Self) -> F,
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
         let slf = SUPERVIZED.with(Clone::clone); //TODO: try_with -> thiserror + try_spawn*?
-        let this = slf.clone();
-        slf.tasks.spawn(task(this))
+        slf.tasks.spawn(future)
     }
 
-    /// Spawn starts a supervised task, calling `spawn_blocking`.
-    #[inline]
+    /// Spawn starts a supervised task, calling `spawn_blocking`.    
     #[track_caller]
-    pub fn spawn_blocking<F, T>(task: F) -> JoinHandle<T>
+    pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
     where
-        F: FnOnce(Self) -> T,
-        F: Send + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
     {
         let slf = SUPERVIZED.with(Clone::clone);
-        let this = slf.clone();
-        slf.tasks.spawn_blocking(|| task(this))
+        slf.tasks.spawn_blocking(f)
     }
 
     /// Returns supervision state immediately
@@ -144,4 +113,17 @@ impl Supervisor {
         slf.tasks.wait().await;
         warn!("Terminated!");
     }
+}
+
+#[test]
+fn assert_all() {
+    fn assert_clone<T: Clone>() {}
+    fn assert_send<T: Send>() {}
+    fn assert_sized<T: Sized>() {}
+    fn assert_sync<T: Sync>() {}
+
+    assert_clone::<Supervisor>();
+    assert_send::<Supervisor>();
+    assert_sized::<Supervisor>();
+    assert_sync::<Supervisor>();
 }
