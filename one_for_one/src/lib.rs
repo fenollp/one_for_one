@@ -13,7 +13,10 @@ use tracing::warn;
 /// * SIGTERM
 ///
 /// Usually, this is awaited on through `tokio::select!`
-/// to then call a given supervisor's `sup.die().await`.
+/// to then call a given supervisor's `Supervisor::terminate().await`.
+///
+/// Note: on Linux, a signal handler is registered for the whole process' life.
+/// Meaning that all later re-registers are ineffectual.
 pub async fn should_die() {
     //TODO: take in bitflags
     let mut sigint = signal(SignalKind::interrupt()).expect("Failed to listen to SIGINT");
@@ -41,7 +44,7 @@ pub fn current() -> Option<Supervisor> {
 /// Scopes (async) code that needs supervision.
 pub fn supervized<F>(f: F) -> TaskLocalFuture<Supervisor, F>
 where
-    F: std::future::Future,
+    F: Future,
 {
     let slf = current().unwrap_or_default();
     SUPERVIZED.scope(slf, f)
@@ -64,16 +67,26 @@ where
 /// This supervision strategy is was dubbed "one_for_one" by the Erlang people:
 /// See https://learnyousomeerlang.com/supervisors
 /// See https://www.erlang.org/doc/man/supervisor.html
+///
+/// Supervisor isn't Copy but it is Clone + Sized + Send + Sync
 #[derive(Clone, Debug, Default)]
 pub struct Supervisor {
     token: CancellationToken,
     tasks: TaskTracker,
 }
 
+#[test]
+fn assert_all() {
+    fn asserts<T: Clone + Sized + Send + Sync>() {}
+    asserts::<Supervisor>();
+}
+
 const REASON: &str = "Not running within supervized(async move { .. }) or sync_supervized(|| ..)";
 
 impl Supervisor {
     /// Spawn starts a supervised task, calling `spawn`.
+    ///
+    /// Panics: if not called within a supervized scope.
     #[inline]
     #[track_caller]
     pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
@@ -86,6 +99,8 @@ impl Supervisor {
     }
 
     /// Spawn starts a supervised task, calling `spawn_blocking`.
+    ///
+    /// Panics: if not called within a supervized scope.
     #[track_caller]
     pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
     where
@@ -97,6 +112,8 @@ impl Supervisor {
     }
 
     /// Returns supervision state immediately
+    ///
+    /// Panics: if not called within a supervized scope.
     #[must_use]
     pub fn is_cancelled() -> bool {
         let slf = current().expect(REASON);
@@ -106,6 +123,8 @@ impl Supervisor {
     /// A future that completes when the supervision
     /// tree is interrupted.
     /// Akin to Go's `<-ctx.Done()` chan recv.
+    ///
+    /// Panics: if not called within a supervized scope.
     pub async fn done() {
         let slf = current().expect(REASON);
         // Gets sibling tokens (don't die if a sibling dies)
@@ -116,6 +135,8 @@ impl Supervisor {
     /// A future that triggers the interruption or termination
     /// of the supervision tree.
     /// Completes when all children are confirmed dead.
+    ///
+    /// Panics: if not called within a supervized scope.
     pub async fn terminate() {
         let slf = current().expect(REASON);
         warn!("Terminating...");
@@ -124,17 +145,4 @@ impl Supervisor {
         slf.tasks.wait().await;
         warn!("Terminated!");
     }
-}
-
-#[test]
-fn assert_all() {
-    fn assert_clone<T: Clone>() {}
-    fn assert_send<T: Send>() {}
-    fn assert_sized<T: Sized>() {}
-    fn assert_sync<T: Sync>() {}
-
-    assert_clone::<Supervisor>();
-    assert_send::<Supervisor>();
-    assert_sized::<Supervisor>();
-    assert_sync::<Supervisor>();
 }
