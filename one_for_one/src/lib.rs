@@ -60,6 +60,62 @@ where
     SUPERVIZED.sync_scope(slf, f)
 }
 
+/// Spawn starts a supervised task, calling `spawn`.
+///
+/// Panics: if not called within a supervized scope.
+#[inline]
+#[track_caller]
+pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let slf = current().expect(REASON);
+    slf.spawn(future)
+}
+
+/// Spawn starts a supervised task, calling `spawn_blocking`.
+///
+/// Panics: if not called within a supervized scope.
+#[track_caller]
+pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let slf = current().expect(REASON);
+    slf.spawn_blocking(f)
+}
+
+/// Returns supervision state immediately
+///
+/// Panics: if not called within a supervized scope.
+#[must_use]
+pub fn is_cancelled() -> bool {
+    let slf = current().expect(REASON);
+    slf.is_cancelled()
+}
+
+/// A future that completes when the supervision
+/// tree is interrupted.
+/// Akin to Go's `<-ctx.Done()` chan recv.
+///
+/// Panics: if not called within a supervized scope.
+pub async fn done() {
+    let slf = current().expect(REASON);
+    slf.done().await;
+}
+
+/// A future that triggers the interruption or termination
+/// of the supervision tree.
+/// Completes when all children are confirmed dead.
+///
+/// Panics: if not called within a supervized scope.
+pub async fn terminate() {
+    let slf = current().expect(REASON);
+    slf.terminate().await;
+}
+
 /// Supervisor implements a supervision tree
 /// where all children get terminated on interrupt
 /// but each die on its own when it's their own trauma.
@@ -85,64 +141,50 @@ const REASON: &str = "Not running within supervized(async move { .. }) or sync_s
 
 impl Supervisor {
     /// Spawn starts a supervised task, calling `spawn`.
-    ///
-    /// Panics: if not called within a supervized scope.
     #[inline]
     #[track_caller]
-    pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let slf = current().expect(REASON);
-        slf.tasks.spawn(future)
+        self.tasks.spawn(future)
     }
 
     /// Spawn starts a supervised task, calling `spawn_blocking`.
-    ///
-    /// Panics: if not called within a supervized scope.
+    #[inline]
     #[track_caller]
-    pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
+    pub fn spawn_blocking<F, R>(&self, f: F) -> JoinHandle<R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let slf = current().expect(REASON);
-        slf.tasks.spawn_blocking(f)
+        self.tasks.spawn_blocking(f)
     }
 
     /// Returns supervision state immediately
-    ///
-    /// Panics: if not called within a supervized scope.
     #[must_use]
-    pub fn is_cancelled() -> bool {
-        let slf = current().expect(REASON);
-        slf.token.is_cancelled()
+    pub fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
     }
 
     /// A future that completes when the supervision
     /// tree is interrupted.
     /// Akin to Go's `<-ctx.Done()` chan recv.
-    ///
-    /// Panics: if not called within a supervized scope.
-    pub async fn done() {
-        let slf = current().expect(REASON);
+    pub async fn done(&self) {
         // Gets sibling tokens (don't die if a sibling dies)
-        let _: () = slf.token.child_token().cancelled().await;
-        warn!("Children cancelled");
+        let _: () = self.token.child_token().cancelled().await;
+        tracing::warn!("Children cancelled");
     }
 
     /// A future that triggers the interruption or termination
     /// of the supervision tree.
     /// Completes when all children are confirmed dead.
-    ///
-    /// Panics: if not called within a supervized scope.
-    pub async fn terminate() {
-        let slf = current().expect(REASON);
-        warn!("Terminating...");
-        slf.tasks.close();
-        slf.token.cancel();
-        slf.tasks.wait().await;
-        warn!("Terminated!");
+    pub async fn terminate(&self) {
+        tracing::warn!("Terminating...");
+        self.tasks.close();
+        self.token.cancel();
+        self.tasks.wait().await;
+        tracing::warn!("Terminated!");
     }
 }
