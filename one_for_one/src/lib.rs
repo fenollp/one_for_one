@@ -72,7 +72,7 @@ where
     F::Output: Send + 'static,
 {
     let slf = current().expect(REASON);
-    slf.spawn(future)
+    slf.spawn(|_| future)
 }
 
 /// Spawn starts a supervised task, calling `spawn_blocking`.
@@ -85,7 +85,7 @@ where
     R: Send + 'static,
 {
     let slf = current().expect(REASON);
-    slf.spawn_blocking(f)
+    slf.spawn_blocking(|_| f())
 }
 
 /// Returns supervision state immediately
@@ -144,12 +144,13 @@ impl Supervisor {
     /// Spawn starts a supervised task, calling `spawn`.
     #[inline]
     #[track_caller]
-    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(&self, task: impl FnOnce(Self) -> F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.tasks.spawn(future)
+        let this = self.clone();
+        self.tasks.spawn(task(this))
     }
 
     /// Spawn starts a supervised task, calling `spawn_blocking`.
@@ -157,10 +158,11 @@ impl Supervisor {
     #[track_caller]
     pub fn spawn_blocking<F, R>(&self, f: F) -> JoinHandle<R>
     where
-        F: FnOnce() -> R + Send + 'static,
+        F: FnOnce(Self) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.tasks.spawn_blocking(f)
+        let this = self.clone();
+        self.tasks.spawn_blocking(|| f(this))
     }
 
     /// Returns supervision state immediately
