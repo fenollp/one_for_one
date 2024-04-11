@@ -42,6 +42,7 @@ pub fn current() -> Option<Supervisor> {
 }
 
 /// Scopes (async) code that needs supervision.
+#[track_caller]
 pub fn supervized<F>(f: F) -> TaskLocalFuture<Supervisor, F>
 where
     F: Future,
